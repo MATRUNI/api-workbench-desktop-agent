@@ -1,0 +1,74 @@
+name: Build and Release Proxy
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger workflow when a tag like v1.0.0 is pushed
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: api-proxy-linux
+            executable: main
+          - os: windows-latest
+            artifact_name: api-proxy-windows.exe
+            executable: main.exe
+          - os: macos-latest
+            artifact_name: api-proxy-macos
+            executable: main
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup V
+        uses: vlang/setup-v@v1.4
+        with:
+          check-latest: true
+
+      - name: Install UPX (Ubuntu/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            sudo apt-get install -y upx-ucl
+          else
+            brew install upx
+          fi
+
+      - name: Compile (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          v -prod main.v
+          upx --best main
+          mv main ${{ matrix.artifact_name }}
+
+      - name: Compile (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          v -prod main.v
+          # We skip UPX on Windows because UPX-packed executables often trigger false-positive warnings in Windows Defender!
+          Rename-Item main.exe ${{ matrix.artifact_name }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
