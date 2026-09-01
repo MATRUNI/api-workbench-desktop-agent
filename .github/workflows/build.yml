@@ -3,72 +3,109 @@ name: Build and Release Proxy
 on:
   push:
     tags:
-      - 'v*' # Trigger workflow when a tag like v1.0.0 is pushed
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             artifact_name: api-proxy-linux
-            executable: main
+
           - os: windows-latest
             artifact_name: api-proxy-windows.exe
-            executable: main.exe
+
           - os: macos-latest
             artifact_name: api-proxy-macos
-            executable: main
 
     runs-on: ${{ matrix.os }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gcc \
+            make \
+            libc6-dev \
+            linux-libc-dev \
+            pkg-config \
+            unzip
       - name: Setup V
-        uses: vlang/setup-v@v1.4
-        with:
-          check-latest: true
+        uses: vlang/setup-v@v1
 
-      - name: Install UPX (Ubuntu/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Show V version
+        run: v version
+      - name: Install UPX (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            sudo apt-get install -y upx-ucl
-          else
-            brew install upx
-          fi
+          sudo apt-get install -y upx-ucl
 
-      - name: Compile (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Build Linux
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
-          v -prod main.v
-          upx --best main
-          mv main ${{ matrix.artifact_name }}
+          set -e
 
-      - name: Compile (Windows)
+          v -prod -skip-unused -cflags "-Os -flto -s" main.v
+
+          upx --best --lzma main
+
+          mv main "${{ matrix.artifact_name }}"
+
+          file "${{ matrix.artifact_name }}"
+      - name: Build macOS
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -e
+
+          v -prod -skip-unused -cflags "-Os -flto -s" main.v
+
+          # UPX is intentionally NOT used on macOS.
+          mv main "${{ matrix.artifact_name }}"
+
+          file "${{ matrix.artifact_name }}"
+      - name: Build Windows
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          v -prod main.v
-          # We skip UPX on Windows because UPX-packed executables often trigger false-positive warnings in Windows Defender!
-          Rename-Item main.exe ${{ matrix.artifact_name }}
+          $ErrorActionPreference = "Stop"
 
+          v -prod -skip-unused -cflags "-Os -flto -s" main.v
+
+          # Don't use UPX on Windows because it can trigger
+          # Windows Defender false-positive warnings.
+          Rename-Item main.exe "${{ matrix.artifact_name }}"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
-
   release:
     needs: build
     runs-on: ubuntu-latest
+
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Release
+      - name: Show artifacts
+        run: |
+          find artifacts -type f -print
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
