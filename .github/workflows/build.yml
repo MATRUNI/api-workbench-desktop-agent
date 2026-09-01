@@ -40,10 +40,17 @@ jobs:
             linux-libc-dev \
             pkg-config \
             unzip
-      - name: Setup V
+      - name: Setup V - Linux/macOS
+        if: matrix.os != 'windows-latest'
         uses: vlang/setup-v@v1
         with:
           stable: true
+      - name: Setup V - Windows
+        if: matrix.os == 'windows-latest'
+        uses: vlang/setup-v@v1.7
+        with:
+          stable: true
+
 
       - name: Show V version
         run: v version
