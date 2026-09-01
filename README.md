@@ -3,92 +3,132 @@
 This is a lightweight, zero-dependency local proxy agent built in [V (Vlang)](https://vlang.io/). 
 It acts as a transparent middleman, allowing your API Workbench frontend to bypass browser CORS restrictions and make complex, unrestricted REST API calls (including large file uploads and binary file downloads).
 
-## Prerequisites
-To compile the source code, you must have the V compiler installed. *(Note: Your end-users do **not** need V installed; they will just run the compiled binary).*
-1. Download and install V from [vlang.io](https://vlang.io/).
-2. Verify installation by running `v version` in your terminal.
+## 🚀 Quick Start (Pre-compiled Binaries)
 
-## Compiling to an Executable
+You do not need to install any dependencies to run the proxy. Simply download the standalone executable for your operating system from the **Releases** tab. The binaries are extremely small and fast:
 
-V compiles down to a single, tiny, lightning-fast binary with zero external dependencies.
+- **Linux** (`api-proxy-linux`): ~314 KB
+- **macOS** (`api-proxy-macos`): ~574 KB
+- **Windows** (`api-proxy-windows.exe`): ~741 KB
 
-1. Open your terminal in the directory containing `main.v`.
-2. Run the following command:
+### Running on Linux / macOS
+1. Open your terminal and navigate to where you downloaded the file.
+2. Make the file executable:
    ```bash
-   v -prod main.v
+   # For Linux
+   chmod +x api-proxy-linux
+
+   # For macOS
+   chmod +x api-proxy-macos
    ```
-   *(The `-prod` flag strips debug symbols and optimizes the binary for size and speed).*
+3. Run the proxy agent:
+   ```bash
+   # For Linux
+   ./api-proxy-linux
+
+   # For macOS
+   ./api-proxy-macos
+   ```
+
+### Running on Windows
+1. Open the folder where you downloaded `api-proxy-windows.exe`.
+2. Double-click the executable, or run it from the Command Prompt / PowerShell:
+   ```cmd
+   api-proxy-windows.exe
+   ```
+
+Upon running, you should see the output: `Streaming API Proxy (Raw TCP Chunked) is running on http://localhost:7777`.
+
+*(Note: You can run the proxy on a custom port by passing it as an argument, e.g., `./api-proxy-linux 8080` or `api-proxy-windows.exe 8080`)*
+
+---
+
+## 🛠️ Build from Source
+
+If you prefer to compile the source code yourself, you must have the [V compiler](https://vlang.io/) installed.
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/YOUR_USERNAME/api-workbench-desktop-agent.git
+cd api-workbench-desktop-agent
+```
+
+### 2. Compile to an Executable
+V compiles down to a single, tiny binary with zero external dependencies. Run the following command to apply extreme size optimizations:
+
+```bash
+v -prod -skip-unused -cflags "-Os -flto -s" main.v
+```
 
 This will instantly generate a standalone executable file in the same directory:
 - **Windows:** `main.exe`
 - **Linux/macOS:** `main`
 
-### Cross-Compiling (Optional)
-V makes it extremely easy to build for other operating systems. If you are on Linux and want to compile a `.exe` for Windows users to download:
+*(Note: If you are on Windows, you might want to omit the UPX/LTO flags if they trigger false-positives in Windows Defender: `v -prod -skip-unused -cflags "-Os -s" main.v`)*
+
+### 3. Run the Proxy
 ```bash
-v -os windows -prod main.v
-```
-
-## Running the Proxy
-
-Users simply double-click the executable or run it from the terminal:
-
-```bash
+# Linux / macOS
 ./main
+
+# Windows
+main.exe
 ```
-You will see the output: `API Proxy Agent is running on http://localhost:7777`
 
 ---
 
-## Frontend Integration Guide
+## ✨ Key Features & Technical Achievements
 
-The frontend must send a `POST` request to `http://localhost:7777/makeapicall`. The proxy handles the rest transparently.
+- **Raw TCP Chunked Streaming:** Directly pipes byte streams between the client and the target server in real-time, resulting in zero memory bloat, even when proxying multi-gigabyte files.
+- **100% Transparent Proxying:** Passes HTTP methods, headers, statuses, and body data natively. No base64 encoding or manual header parsing required.
+- **Bypasses CORS Natively:** Automatically intercepts `OPTIONS` preflight requests and injects the proper `Access-Control-Allow-*` headers into the target server's response stream.
+- **Ultra-Lightweight & Fast:** Built in **Vlang (V)**. Compiles to an extremely small binary (< 1MB) with **zero external dependencies**. Uses a minimal CPU and RAM footprint.
+- **Cross-Platform & CI/CD Automated:** Available as a standalone executable for Linux, macOS, and Windows, fully automated via GitHub Actions with UPX compression.
+- **Dynamic Configuration:** Run on any port without recompiling just by passing it as an argument (e.g., `./api-proxy-linux 8080`).
 
-### 1. Request Configuration
-Pass the actual target configuration via these custom HTTP Headers:
-- `X-Target-Url`: The real API URL (e.g., `https://api.example.com/users`)
-- `X-Target-Method`: The HTTP method (e.g., `GET`, `POST`, `PUT`)
-- `X-Target-Headers`: A **JSON stringified object** of the headers the target API expects (like Authorization tokens).
+---
+
+## 💻 Frontend Integration Guide
+
+Using the proxy is incredibly simple. Just make your HTTP request exactly as you would to the actual API, but change the URL to the proxy and provide the real destination in the `X-Target-Url` header.
+
+### Request Configuration
+- Change your `fetch` URL to `http://localhost:7777/` (or whichever path your actual API expects, the proxy resolves it properly).
+- Add the `X-Target-Url` header with your actual endpoint.
+- Keep your HTTP method (`GET`, `POST`, `PUT`, etc.) and any other headers (`Authorization`, `Content-Type`) exactly the same! The proxy automatically forwards them natively.
 
 **Example JavaScript Fetch (Upload & Request):**
 ```javascript
 const formData = new FormData();
 formData.append("file", myFile);
 
-const response = await fetch("http://localhost:7777/makeapicall", {
-    method: "POST", // The proxy ALWAYS receives a POST
-    body: formData, // Natively pass FormData, JSON, or Blob here!
+const response = await fetch("http://localhost:7777", {
+    method: "PUT", // Use the actual HTTP method!
+    body: formData, // Natively pass FormData, JSON, or Blob here
     headers: {
         "X-Target-Url": "https://api.github.com/upload",
-        "X-Target-Method": "PUT",
-        "X-Target-Headers": JSON.stringify({
-            "Authorization": "Bearer YOUR_TOKEN"
-        })
+        "Authorization": "Bearer YOUR_TOKEN" // Proxy forwards this natively
     }
 });
 ```
 
-### 2. Response Handling
-The proxy is 100% transparent. It returns the exact **Status Code**, **Content-Type**, and **Raw Body Data** from the target server.
+### Response Handling
+Because the proxy operates at the TCP layer, the response is exactly what the target server sent back. There is no base64 decoding required. You can read the status codes, headers, and body streams directly!
 
-To read the target server's raw response headers (like rate limit tracking or custom tokens), you must decode the Base64 string that the proxy attaches:
 ```javascript
 // 1. Get the real status code
 console.log("Target API Status:", response.status); 
 
-// 2. Decode the target API's raw headers
-const b64Headers = response.headers.get("X-Proxy-Headers-Base64");
-if (b64Headers) {
-    const rawHeaders = atob(b64Headers); // Decode Base64 to string
-    console.log("Target API Headers:\n", rawHeaders);
-}
+// 2. Read the target API's raw headers directly
+console.log("Rate Limit:", response.headers.get("X-RateLimit-Remaining"));
 
 // 3. Process the response body natively
-const contentType = response.headers.get("Content-Type");
+const contentType = response.headers.get("Content-Type") || "";
 if (contentType.includes("application/json")) {
     const data = await response.json();
+    console.log(data);
 } else if (contentType.includes("image/")) {
     const blob = await response.blob();
-    // Do something with the image file
+    // Render the image directly
 }
 ```
