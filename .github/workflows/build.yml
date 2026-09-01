@@ -42,6 +42,8 @@ jobs:
             unzip
       - name: Setup V
         uses: vlang/setup-v@v1
+        with:
+          stable: true
 
       - name: Show V version
         run: v version
@@ -80,9 +82,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
-          v -prod -skip-unused -cflags "-Os -flto -s" main.v
-
+          v -prod -skip-unused -cflags "-Os -s" main.v
           # Don't use UPX on Windows because it can trigger
           # Windows Defender false-positive warnings.
           Rename-Item main.exe "${{ matrix.artifact_name }}"
