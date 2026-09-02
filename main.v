@@ -2,7 +2,6 @@ module main
 
 import net
 import net.ssl
-import net.urllib
 import time
 import os
 
@@ -111,20 +110,31 @@ fn handle_client(mut client net.TcpConn) {
 		return
 	}
 
-	target_url := urllib.parse(target_url_str) or {
-		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nInvalid target URL') or {}
-		return
+	mut scheme := 'http'
+	mut rest := target_url_str
+	if rest.starts_with('https://') {
+		scheme = 'https'
+		rest = rest[8..]
+	} else if rest.starts_with('http://') {
+		scheme = 'http'
+		rest = rest[7..]
 	}
 
-	host := target_url.hostname()
-	mut port := target_url.port().int()
-	if port == 0 {
-		port = if target_url.scheme == 'https' { 443 } else { 80 }
+	slash_idx := rest.index('/') or { rest.len }
+	host_port := unsafe { rest[..slash_idx] }
+
+	mut host := host_port
+	mut port := if scheme == 'https' { 443 } else { 80 }
+
+	colon_idx := host_port.index(':') or { -1 }
+	if colon_idx != -1 {
+		host = unsafe { host_port[..colon_idx] }
+		port = host_port[colon_idx + 1..].int()
 	}
 
 	mut target_ptr := voidptr(0)
 
-	if target_url.scheme == 'https' {
+	if scheme == 'https' {
 		mut target_ssl := ssl.new_ssl_conn(verify: '') or {
 			client.write_string('HTTP/1.1 502 Bad Gateway\r\n\r\nFailed to init SSL') or {}
 			return
@@ -143,13 +153,7 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	// Reconstruct request path to forward
-	mut raw_path := target_url_str.replace(target_url.scheme + '://' + host, '')
-	if raw_path.starts_with(':' + port.str()) {
-		raw_path = raw_path[port.str().len + 1..]
-	}
-	if raw_path == '' {
-		raw_path = '/'
-	}
+	mut raw_path := if slash_idx < rest.len { rest[slash_idx..] } else { '/' }
 
 	mut out_req := '${method} ${raw_path} HTTP/1.1\r\n'
 	out_req += 'Host: ${host}\r\n'
@@ -167,149 +171,90 @@ fn handle_client(mut client net.TcpConn) {
 	}
 	out_req += '\r\n'
 
-	unsafe {
-		if target_url.scheme == 'https' {
-			mut t_ssl := &ssl.SSLConn(target_ptr)
-			t_ssl.write_string(out_req) or {}
-		} else {
-			mut t_tcp := &net.TcpConn(target_ptr)
-			t_tcp.write_string(out_req) or {}
-		}
-	}
-
-	// Spawn chunk streaming for two-way pipe
 	client_ptr := voidptr(&client)
 
-	// Target -> Client chunk streaming (blocking in this thread)
-	spawn pipe_stream_ct(client_ptr, target_ptr, target_url.scheme)
-	unsafe {
-		mut buf := []u8{len: 4096}
-		mut headers_passed := false
-		mut header_data := []u8{}
-
-		if target_url.scheme == 'https' {
+	if scheme == 'https' {
+		unsafe {
 			mut t_ssl := &ssl.SSLConn(target_ptr)
-			for {
-				n := t_ssl.read(mut buf) or { break }
-				if n == 0 {
-					break
-				}
-				if !headers_passed {
-					header_data << buf[..n]
-					mut end_idx := -1
-					for i in 0 .. header_data.len - 3 {
-						if header_data[i] == `\r` && header_data[i + 1] == `\n` && header_data[i + 2] == `\r` && header_data[i + 3] == `\n` {
-							end_idx = i
-							break
-						}
-					}
-					if end_idx != -1 {
-						headers_passed = true
-						mut original_headers := header_data[0..end_idx].bytestr()
-
-						mut clean_headers := ''
-						for l in original_headers.split('\r\n') {
-							if l.to_lower().starts_with('access-control-') {
-								continue
-							}
-							clean_headers += l + '\r\n'
-						}
-						mut mod_headers := clean_headers.trim_right('\r\n')
-
-						mod_headers += '\r\nAccess-Control-Allow-Origin: *'
-						mod_headers += '\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS'
-						mod_headers += '\r\nAccess-Control-Allow-Headers: *'
-						mod_headers += '\r\nAccess-Control-Expose-Headers: *'
-						mod_headers += '\r\n\r\n'
-
-						client.write_string(mod_headers) or { break }
-
-						body_part := header_data[end_idx + 4..]
-						if body_part.len > 0 {
-							client.write(body_part) or { break }
-						}
-						header_data = []u8{} // free memory
-					}
-				} else {
-					client.write(buf[..n]) or { break }
-				}
-			}
-			t_ssl.close() or {}
-		} else {
+			t_ssl.write_string(out_req) or {}
+			spawn pipe_stream_ct[ssl.SSLConn](client_ptr, target_ptr)
+			handle_target_stream[ssl.SSLConn](mut client, mut t_ssl)
+		}
+	} else {
+		unsafe {
 			mut t_tcp := &net.TcpConn(target_ptr)
-			for {
-				n := t_tcp.read(mut buf) or { break }
-				if n == 0 {
-					break
-				}
-				if !headers_passed {
-					header_data << buf[..n]
-					mut end_idx := -1
-					for i in 0 .. header_data.len - 3 {
-						if header_data[i] == `\r` && header_data[i + 1] == `\n` && header_data[i + 2] == `\r` && header_data[i + 3] == `\n` {
-							end_idx = i
-							break
-						}
-					}
-					if end_idx != -1 {
-						headers_passed = true
-						mut original_headers := header_data[0..end_idx].bytestr()
-
-						mut clean_headers := ''
-						for l in original_headers.split('\r\n') {
-							if l.to_lower().starts_with('access-control-') {
-								continue
-							}
-							clean_headers += l + '\r\n'
-						}
-						mut mod_headers := clean_headers.trim_right('\r\n')
-
-						mod_headers += '\r\nAccess-Control-Allow-Origin: *'
-						mod_headers += '\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS'
-						mod_headers += '\r\nAccess-Control-Allow-Headers: *'
-						mod_headers += '\r\nAccess-Control-Expose-Headers: *'
-						mod_headers += '\r\n\r\n'
-
-						client.write_string(mod_headers) or { break }
-
-						body_part := header_data[end_idx + 4..]
-						if body_part.len > 0 {
-							client.write(body_part) or { break }
-						}
-						header_data = []u8{} // free memory
-					}
-				} else {
-					client.write(buf[..n]) or { break }
-				}
-			}
-			t_tcp.close() or {}
+			t_tcp.write_string(out_req) or {}
+			spawn pipe_stream_ct[net.TcpConn](client_ptr, target_ptr)
+			handle_target_stream[net.TcpConn](mut client, mut t_tcp)
 		}
 	}
 }
 
-// Client -> Target chunk streaming
-fn pipe_stream_ct(client_ptr voidptr, target_ptr voidptr, scheme string) {
-	unsafe {
-		mut client := &net.TcpConn(client_ptr)
-		mut buf := []u8{len: 4096}
-		if scheme == 'https' {
-			mut t_ssl := &ssl.SSLConn(target_ptr)
-			for {
-				n := client.read(mut buf) or { break }
-				if n == 0 {
+fn handle_target_stream[T](mut client net.TcpConn, mut target T) {
+	mut buf := []u8{len: 4096}
+	mut headers_passed := false
+	mut header_data := []u8{}
+
+	for {
+		n := target.read(mut buf) or { break }
+		if n == 0 {
+			break
+		}
+		if !headers_passed {
+			header_data << buf[..n]
+			mut end_idx := -1
+			for i in 0 .. header_data.len - 3 {
+				if header_data[i] == `\r` && header_data[i + 1] == `\n` && header_data[i + 2] == `\r` && header_data[i + 3] == `\n` {
+					end_idx = i
 					break
 				}
-				t_ssl.write(buf[..n]) or { break }
+			}
+			if end_idx != -1 {
+				headers_passed = true
+				mut original_headers := header_data[0..end_idx].bytestr()
+
+				mut clean_headers := ''
+				for l in original_headers.split('\r\n') {
+					if l.to_lower().starts_with('access-control-') {
+						continue
+					}
+					clean_headers += l + '\r\n'
+				}
+				mut mod_headers := clean_headers.trim_right('\r\n')
+
+				mod_headers += '\r\nAccess-Control-Allow-Origin: *'
+				mod_headers += '\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS'
+				mod_headers += '\r\nAccess-Control-Allow-Headers: *'
+				mod_headers += '\r\nAccess-Control-Expose-Headers: *'
+				mod_headers += '\r\n\r\n'
+
+				client.write_string(mod_headers) or { break }
+
+				body_part := unsafe { header_data[end_idx + 4..] }
+				if body_part.len > 0 {
+					client.write(body_part) or { break }
+				}
+				header_data = []u8{} // free memory
 			}
 		} else {
-			mut t_tcp := &net.TcpConn(target_ptr)
-			for {
-				n := client.read(mut buf) or { break }
-				if n == 0 {
-					break
-				}
-				t_tcp.write(buf[..n]) or { break }
+			client.write(buf[..n]) or { break }
+		}
+	}
+	target.close() or {}
+}
+
+// Client -> Target chunk streaming
+fn pipe_stream_ct[T](client_ptr voidptr, target_ptr voidptr) {
+	unsafe {
+		mut client := &net.TcpConn(client_ptr)
+		mut target := &T(target_ptr)
+		mut buf := []u8{len: 4096}
+		for {
+			n := client.read(mut buf) or { break }
+			if n == 0 {
+				break
 			}
+			target.write(buf[..n]) or { break }
 		}
 	}
 }
