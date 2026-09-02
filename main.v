@@ -5,8 +5,16 @@ import net.ssl
 import time
 import os
 
+const build_port = $env('PROXY_PORT')
+const build_origin = $env('PROXY_ORIGIN')
+const build_header = $env('PROXY_HEADER')
+
 fn main() {
 	mut port := 7777
+	if build_port != '' {
+		port = build_port.int()
+	}
+	
 	if os.args.len > 1 {
 		parsed_port := os.args[1].int()
 		if parsed_port > 0 && parsed_port <= 65535 {
@@ -79,6 +87,29 @@ fn handle_client(mut client net.TcpConn) {
 	}
 	method := req_line[0]
 
+	mut origin := ''
+	for line in lines {
+		if line.to_lower().starts_with('origin:') {
+			parts := line.split(':')
+			if parts.len > 1 {
+				origin = line[parts[0].len + 1..].trim_space()
+			}
+		}
+	}
+	
+	mut is_allowed := true
+	if build_origin != '' {
+		is_allowed = false
+		if origin == '' || origin == build_origin || origin == '${build_origin}/' || origin.starts_with('http://localhost:') {
+			is_allowed = true
+		}
+	}
+	
+	if !is_allowed {
+		client.write_string('HTTP/1.1 403 Forbidden\r\n\r\nUnauthorized Origin: ${origin}') or {}
+		return
+	}
+
 	// Handle preflight
 	if method == 'OPTIONS' {
 		mut req_headers_val := '*'
@@ -90,14 +121,23 @@ fn handle_client(mut client net.TcpConn) {
 				}
 			}
 		}
-		cors_res := 'HTTP/1.1 200 OK\r\n' + 'Access-Control-Allow-Origin: *\r\n' + 'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n' + 'Access-Control-Allow-Headers: ${req_headers_val}\r\n' + 'Access-Control-Expose-Headers: *\r\n' + 'Content-Length: 2\r\n\r\nok'
+		mut allow_origin := '*'
+		if build_origin != '' {
+			allow_origin = if origin != '' { origin } else { '*' }
+		}
+		cors_res := 'HTTP/1.1 200 OK\r\n' + 'Access-Control-Allow-Origin: ${allow_origin}\r\n' + 'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n' + 'Access-Control-Allow-Headers: ${req_headers_val}\r\n' + 'Access-Control-Expose-Headers: *\r\n' + 'Content-Length: 2\r\n\r\nok'
 		client.write_string(cors_res) or {}
 		return
 	}
 
+	mut target_header := 'x-target-url'
+	if build_header != '' {
+		target_header = build_header.to_lower()
+	}
+
 	mut target_url_str := ''
 	for line in lines {
-		if line.to_lower().starts_with('x-target-url:') {
+		if line.to_lower().starts_with('${target_header}:') {
 			parts := line.split(':')
 			if parts.len > 1 {
 				target_url_str = line[parts[0].len + 1..].trim_space()
@@ -106,7 +146,7 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	if target_url_str == '' {
-		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nMissing X-Target-Url header') or {}
+		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nMissing ${target_header} header') or {}
 		return
 	}
 
@@ -164,7 +204,7 @@ fn handle_client(mut client net.TcpConn) {
 			break
 		}
 		l_lower := line.to_lower()
-		if l_lower.starts_with('host:') || l_lower.starts_with('connection:') || l_lower.starts_with('x-target-') {
+		if l_lower.starts_with('host:') || l_lower.starts_with('connection:') || l_lower.starts_with('${target_header}:') {
 			continue
 		}
 		out_req += line + '\r\n'
@@ -178,19 +218,19 @@ fn handle_client(mut client net.TcpConn) {
 			mut t_ssl := &ssl.SSLConn(target_ptr)
 			t_ssl.write_string(out_req) or {}
 			spawn pipe_stream_ct[ssl.SSLConn](client_ptr, target_ptr)
-			handle_target_stream[ssl.SSLConn](mut client, mut t_ssl)
+			handle_target_stream[ssl.SSLConn](mut client, mut t_ssl, origin)
 		}
 	} else {
 		unsafe {
 			mut t_tcp := &net.TcpConn(target_ptr)
 			t_tcp.write_string(out_req) or {}
 			spawn pipe_stream_ct[net.TcpConn](client_ptr, target_ptr)
-			handle_target_stream[net.TcpConn](mut client, mut t_tcp)
+			handle_target_stream[net.TcpConn](mut client, mut t_tcp, origin)
 		}
 	}
 }
 
-fn handle_target_stream[T](mut client net.TcpConn, mut target T) {
+fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string) {
 	mut buf := []u8{len: 4096}
 	mut headers_passed := false
 	mut header_data := []u8{}
@@ -222,7 +262,11 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T) {
 				}
 				mut mod_headers := clean_headers.trim_right('\r\n')
 
-				mod_headers += '\r\nAccess-Control-Allow-Origin: *'
+				mut allow_origin := '*'
+				if build_origin != '' {
+					allow_origin = if origin != '' { origin } else { '*' }
+				}
+				mod_headers += '\r\nAccess-Control-Allow-Origin: ${allow_origin}'
 				mod_headers += '\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS'
 				mod_headers += '\r\nAccess-Control-Allow-Headers: *'
 				mod_headers += '\r\nAccess-Control-Expose-Headers: *'

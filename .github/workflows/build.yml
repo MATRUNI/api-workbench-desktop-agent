@@ -16,12 +16,15 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_name: api-proxy-linux
+            wb_artifact_name: workbench-agent-linux
 
           - os: windows-latest
             artifact_name: api-proxy-windows.exe
+            wb_artifact_name: workbench-agent-windows.exe
 
           - os: macos-latest
             artifact_name: api-proxy-macos
+            wb_artifact_name: workbench-agent-macos
 
     runs-on: ${{ matrix.os }}
 
@@ -64,40 +67,59 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          v -prod -skip-unused -cflags "-Os -flto -s" main.v
-
+          
+          # 1. Open Source Build
+          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -cflags "-Os -flto -s" main.v
           upx --best --lzma main
-
           mv main "${{ matrix.artifact_name }}"
+          
+          # 2. Secure Workbench Build
+          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -cflags "-Os -flto -s" main.v
+          upx --best --lzma main
+          mv main "${{ matrix.wb_artifact_name }}"
 
-          file "${{ matrix.artifact_name }}"
       - name: Build macOS
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
           set -e
-
-          v -prod -skip-unused -cflags "-Os -flto -s" main.v
-
-          # UPX is intentionally NOT used on macOS.
+          
+          # 1. Open Source Build
+          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -cflags "-Os -flto -s" main.v
           mv main "${{ matrix.artifact_name }}"
+          
+          # 2. Secure Workbench Build
+          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -cflags "-Os -flto -s" main.v
+          mv main "${{ matrix.wb_artifact_name }}"
 
-          file "${{ matrix.artifact_name }}"
       - name: Build Windows
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # We use MSVC instead of GCC on Windows to avoid mbedtls compilation errors.
-          # Also skipping -skip-unused on Windows to prevent strict C initializer bugs.
+          
+          # 1. Open Source Build
+          $env:PROXY_PORT=""
+          $env:PROXY_ORIGIN=""
+          $env:PROXY_HEADER=""
           v -cc msvc -prod main.v
           Rename-Item main.exe "${{ matrix.artifact_name }}"
-      - name: Upload Artifact
+          
+          # 2. Secure Workbench Build
+          $env:PROXY_PORT="17777"
+          $env:PROXY_ORIGIN="https://api-os.pages.dev"
+          $env:PROXY_HEADER="x-workbench-target"
+          v -cc msvc -prod main.v
+          Rename-Item main.exe "${{ matrix.wb_artifact_name }}"
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: ${{ matrix.os }}-binaries
+          path: |
+            ${{ matrix.artifact_name }}
+            ${{ matrix.wb_artifact_name }}
+            
   release:
     needs: build
     runs-on: ubuntu-latest
