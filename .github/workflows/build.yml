@@ -89,9 +89,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          v -prod -skip-unused -cflags "-Os -s" main.v
-          # Don't use UPX on Windows because it can trigger
-          # Windows Defender false-positive warnings.
+          # We use MSVC instead of GCC on Windows to avoid mbedtls compilation errors.
+          # Also skipping -skip-unused on Windows to prevent strict C initializer bugs.
+          v -cc msvc -prod main.v
           Rename-Item main.exe "${{ matrix.artifact_name }}"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
