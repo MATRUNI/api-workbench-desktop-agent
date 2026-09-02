@@ -254,7 +254,10 @@ fn pipe_stream_ct[T](client_ptr voidptr, target_ptr voidptr) {
 			if n == 0 {
 				break
 			}
-			target.write(buf[..n]) or { break }
+			// Use write_string + bytestr() instead of write() to bypass
+			// a missing mbedtls C implementation bug on Windows MSVC.
+			// V strings are binary-safe (can contain null bytes).
+			target.write_string(buf[..n].bytestr()) or { break }
 		}
 	}
 }
