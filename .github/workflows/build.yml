@@ -69,12 +69,12 @@ jobs:
           set -e
           
           # 1. Open Source Build
-          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -cflags "-Os -flto -s" main.v
+          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           upx --best --lzma main
           mv main "${{ matrix.artifact_name }}"
           
           # 2. Secure Workbench Build
-          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -cflags "-Os -flto -s" main.v
+          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           upx --best --lzma main
           mv main "${{ matrix.wb_artifact_name }}"
 
@@ -85,12 +85,16 @@ jobs:
           set -e
           
           # 1. Open Source Build
-          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -cflags "-Os -flto -s" main.v
+          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           mv main "${{ matrix.artifact_name }}"
           
           # 2. Secure Workbench Build
-          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -cflags "-Os -flto -s" main.v
+          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           mv main "${{ matrix.wb_artifact_name }}"
+
+      - name: Install UPX (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install upx -y
 
       - name: Build Windows
         if: matrix.os == 'windows-latest'
@@ -102,14 +106,16 @@ jobs:
           $env:PROXY_PORT=""
           $env:PROXY_ORIGIN=""
           $env:PROXY_HEADER=""
-          v -cc msvc -prod main.v
+          v -cc msvc -prod -skip-unused -d no_backtrace main.v
+          upx --best --lzma main.exe
           Rename-Item main.exe "${{ matrix.artifact_name }}"
           
           # 2. Secure Workbench Build
           $env:PROXY_PORT="17777"
           $env:PROXY_ORIGIN="https://api-os.pages.dev"
           $env:PROXY_HEADER="x-workbench-target"
-          v -cc msvc -prod main.v
+          v -cc msvc -prod -skip-unused -d no_backtrace main.v
+          upx --best --lzma main.exe
           Rename-Item main.exe "${{ matrix.wb_artifact_name }}"
 
       - name: Upload Artifacts

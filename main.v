@@ -2,7 +2,6 @@ module main
 
 import net
 import net.ssl
-import time
 import os
 
 const build_port = $env('PROXY_PORT')
@@ -42,7 +41,7 @@ fn main() {
 
 fn handle_client(mut client net.TcpConn) {
 	defer { client.close() or {} }
-	client.set_read_timeout(time.second * 30)
+	client.set_read_timeout(30000000000) // 30 seconds in nanoseconds
 
 	mut header_buf := []u8{cap: 4096}
 	mut temp_buf := []u8{len: 1}
@@ -86,6 +85,7 @@ fn handle_client(mut client net.TcpConn) {
 		return
 	}
 	method := req_line[0]
+	req_path := req_line[1]
 
 	mut origin := ''
 	for line in lines {
@@ -136,17 +136,28 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	mut target_url_str := ''
-	for line in lines {
-		if line.to_lower().starts_with('${target_header}:') {
-			parts := line.split(':')
-			if parts.len > 1 {
-				target_url_str = line[parts[0].len + 1..].trim_space()
+	
+	// 1. Try to get target from query parameter ?url=
+	url_idx := req_path.index('?url=') or { -1 }
+	if url_idx != -1 {
+		raw_query_url := req_path[url_idx + 5..]
+		target_url_str = unescape_url(raw_query_url)
+	}
+
+	// 2. Fallback to header
+	if target_url_str == '' {
+		for line in lines {
+			if line.to_lower().starts_with('${target_header}:') {
+				parts := line.split(':')
+				if parts.len > 1 {
+					target_url_str = line[parts[0].len + 1..].trim_space()
+				}
 			}
 		}
 	}
 
 	if target_url_str == '' {
-		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nMissing ${target_header} header') or {}
+		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nMissing ${target_header} header or ?url= parameter') or {}
 		return
 	}
 
@@ -218,19 +229,19 @@ fn handle_client(mut client net.TcpConn) {
 			mut t_ssl := &ssl.SSLConn(target_ptr)
 			t_ssl.write_string(out_req) or {}
 			spawn pipe_stream_ct[ssl.SSLConn](client_ptr, target_ptr)
-			handle_target_stream[ssl.SSLConn](mut client, mut t_ssl, origin)
+			handle_target_stream[ssl.SSLConn](mut client, mut t_ssl, origin, target_header)
 		}
 	} else {
 		unsafe {
 			mut t_tcp := &net.TcpConn(target_ptr)
 			t_tcp.write_string(out_req) or {}
 			spawn pipe_stream_ct[net.TcpConn](client_ptr, target_ptr)
-			handle_target_stream[net.TcpConn](mut client, mut t_tcp, origin)
+			handle_target_stream[net.TcpConn](mut client, mut t_tcp, origin, target_header)
 		}
 	}
 }
 
-fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string) {
+fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, target_header string) {
 	mut buf := []u8{len: 4096}
 	mut headers_passed := false
 	mut header_data := []u8{}
@@ -270,6 +281,7 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string) 
 				mod_headers += '\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS'
 				mod_headers += '\r\nAccess-Control-Allow-Headers: *'
 				mod_headers += '\r\nAccess-Control-Expose-Headers: *'
+				mod_headers += '\r\nVary: ${target_header}, Origin'
 				mod_headers += '\r\n\r\n'
 
 				client.write_string(mod_headers) or { break }
@@ -304,4 +316,24 @@ fn pipe_stream_ct[T](client_ptr voidptr, target_ptr voidptr) {
 			target.write_string(buf[..n].bytestr()) or { break }
 		}
 	}
+}
+
+fn hex2int(c u8) u8 {
+	if c >= `0` && c <= `9` { return c - `0` }
+	if c >= `a` && c <= `f` { return c - `a` + 10 }
+	if c >= `A` && c <= `F` { return c - `A` + 10 }
+	return 0
+}
+
+fn unescape_url(s string) string {
+	mut buf := []u8{cap: s.len}
+	for i := 0; i < s.len; i++ {
+		if s[i] == `%` && i + 2 < s.len {
+			buf << (hex2int(s[i + 1]) << 4) | hex2int(s[i + 2])
+			i += 2
+		} else {
+			buf << s[i]
+		}
+	}
+	return buf.bytestr()
 }
