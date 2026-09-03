@@ -5,11 +5,11 @@ It acts as a transparent middleman, allowing your API Workbench frontend to bypa
 
 ## 🚀 Quick Start (Pre-compiled Binaries)
 
-You do not need to install any dependencies to run the proxy. Simply download the standalone executable for your operating system from the **Releases** tab. The binaries are extremely small and fast:
+You do not need to install any dependencies to run the proxy. Simply download the standalone executable for your operating system from the **Releases** tab. The binaries are highly optimized and extremely small:
 
-- **Linux** (`api-proxy-linux`): ~314 KB
-- **macOS** (`api-proxy-macos`): ~574 KB
-- **Windows** (`api-proxy-windows.exe`): ~741 KB
+- **Linux** (`api-proxy-linux`): ~222 KB
+- **Windows** (`api-proxy-windows.exe`): ~322 KB
+- **macOS** (`api-proxy-macos`): ~396 KB
 
 ### Running on Linux / macOS
 1. Open your terminal and navigate to where you downloaded the file.
@@ -57,7 +57,8 @@ cd api-workbench-desktop-agent
 V compiles down to a single, tiny binary with zero external dependencies. Run the following command to apply extreme size optimizations:
 
 ```bash
-v -prod -skip-unused -cflags "-Os -flto -s" main.v
+v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+upx --best --lzma main # Optional: for maximum compression
 ```
 
 This will instantly generate a standalone executable file in the same directory:
@@ -82,8 +83,9 @@ main.exe
 - **Raw TCP Chunked Streaming:** Directly pipes byte streams between the client and the target server in real-time, resulting in zero memory bloat, even when proxying multi-gigabyte files.
 - **100% Transparent Proxying:** Passes HTTP methods, headers, statuses, and body data natively. No base64 encoding or manual header parsing required.
 - **Bypasses CORS Natively:** Automatically intercepts `OPTIONS` preflight requests and injects the proper `Access-Control-Allow-*` headers into the target server's response stream.
-- **Ultra-Lightweight & Fast:** Built in **Vlang (V)**. Compiles to an extremely small binary (< 1MB) with **zero external dependencies**. Uses a minimal CPU and RAM footprint.
-- **Cross-Platform & CI/CD Automated:** Available as a standalone executable for Linux, macOS, and Windows, fully automated via GitHub Actions with UPX compression.
+- **Smart Browser Caching:** Automatically injects `Vary` headers to perfectly isolate caches, preventing cross-contamination when fetching identical paths with different target headers.
+- **Ultra-Lightweight & Fast:** Built in **Vlang (V)**. Compiles to an incredibly small binary (~200-400 KB) with **zero external dependencies**.
+- **Cross-Platform & CI/CD Automated:** Available as a standalone executable for Linux, macOS, and Windows, fully automated via GitHub Actions with aggressive UPX compression.
 - **Dynamic Configuration:** Run on any port without recompiling just by passing it as an argument (e.g., `./api-proxy-linux 8080`).
 
 ---
@@ -131,4 +133,12 @@ if (contentType.includes("application/json")) {
     const blob = await response.blob();
     // Render the image directly
 }
+```
+
+### Native Media Streaming (Video/Audio)
+HTML `<video>` and `<audio>` tags cannot send custom HTTP headers. If you need to proxy media files and want native seeking/buffering (`Range` requests) to work properly, pass the target URL directly as a query parameter (`?url=`).
+
+```html
+<!-- The proxy automatically extracts the ?url= parameter and isolates the browser cache! -->
+<video controls src="http://localhost:7777/?url=https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm"></video>
 ```
