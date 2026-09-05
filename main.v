@@ -41,7 +41,7 @@ fn main() {
 
 fn handle_client(mut client net.TcpConn) {
 	defer { client.close() or {} }
-	client.set_read_timeout(30000000000) // 30 seconds in nanoseconds
+	client.set_read_timeout(30000000000) 
 
 	mut header_buf := []u8{cap: 4096}
 	mut temp_buf := []u8{len: 1}
@@ -71,7 +71,7 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	if matched_end != 4 {
-		return // Invalid HTTP request
+		return 
 	}
 
 	header_str := header_buf.bytestr()
@@ -110,7 +110,7 @@ fn handle_client(mut client net.TcpConn) {
 		return
 	}
 
-	// Handle preflight
+	
 	if method == 'OPTIONS' {
 		mut req_headers_val := '*'
 		for line in lines {
@@ -121,11 +121,14 @@ fn handle_client(mut client net.TcpConn) {
 				}
 			}
 		}
-		mut allow_origin := '*'
+		mut allow_origin := origin
+		if allow_origin == '' {
+		    allow_origin = '*' 
+		}
 		if build_origin != '' {
 			allow_origin = if origin != '' { origin } else { '*' }
 		}
-		cors_res := 'HTTP/1.1 200 OK\r\n' + 'Access-Control-Allow-Origin: ${allow_origin}\r\n' + 'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n' + 'Access-Control-Allow-Headers: ${req_headers_val}\r\n' + 'Access-Control-Expose-Headers: *\r\n' + 'Content-Length: 2\r\n\r\nok'
+		cors_res := 'HTTP/1.1 200 OK\r\n' + 'Access-Control-Allow-Origin: ${allow_origin}\r\n' + 'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n' + 'Access-Control-Allow-Headers: ${req_headers_val}\r\n' + 'Access-Control-Allow-Credentials: true\r\n' + 'Access-Control-Expose-Headers: *\r\n' + 'Content-Length: 2\r\n\r\nok'
 		client.write_string(cors_res) or {}
 		return
 	}
@@ -136,25 +139,36 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	mut target_url_str := ''
-	
-	// 1. Try to get target from query parameter ?url=
-	url_idx := req_path.index('?url=') or { -1 }
-	if url_idx != -1 {
-		raw_query_url := req_path[url_idx + 5..]
-		target_url_str = unescape_url(raw_query_url)
-	}
+        
+    url_idx := req_path.index('?url=') or { -1 }
+    if url_idx != -1 {
+        raw_query_url := req_path[url_idx + 5..]
+        target_url_str = unescape_url(raw_query_url)
+    }
+    
+    if target_url_str == '' && (req_path.starts_with('/http://') || req_path.starts_with('/https://')) {
+        target_url_str = unescape_url(req_path[1..])
+    }
 
-	// 2. Fallback to header
-	if target_url_str == '' {
-		for line in lines {
-			if line.to_lower().starts_with('${target_header}:') {
-				parts := line.split(':')
-				if parts.len > 1 {
-					target_url_str = line[parts[0].len + 1..].trim_space()
-				}
-			}
-		}
-	}
+    if target_url_str == '' {
+        for line in lines {
+            if line.to_lower().starts_with('${target_header}:') {
+                parts := line.split(':')
+                if parts.len > 1 {
+                    target_url_str = line[parts[0].len + 1..].trim_space()
+                }
+            }
+        }
+    }
+
+    if target_url_str == '' {
+        err_res := 'HTTP/1.1 400 Bad Request\r\n' +
+            'Access-Control-Allow-Origin: ${if origin != '' { origin } else { '*' }}\r\n' +
+            'Access-Control-Allow-Credentials: true\r\n\r\n' +
+            'Missing target URL'
+        client.write_string(err_res) or {}
+        return
+    }
 
 	if target_url_str == '' {
 		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nMissing ${target_header} header or ?url= parameter') or {}
@@ -203,7 +217,6 @@ fn handle_client(mut client net.TcpConn) {
 		target_ptr = voidptr(target_tcp)
 	}
 
-	// Reconstruct request path to forward
 	mut raw_path := if slash_idx < rest.len { rest[slash_idx..] } else { '/' }
 
 	mut out_req := '${method} ${raw_path} HTTP/1.1\r\n'
@@ -263,7 +276,17 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 			if end_idx != -1 {
 				headers_passed = true
 				mut original_headers := header_data[0..end_idx].bytestr()
-
+                if original_headers.contains(' 302 ') || original_headers.contains(' 301 ') || original_headers.contains(' 307 ') || original_headers.contains(' 308 ') {
+                    lines_arr := original_headers.split('\r\n')
+                    if lines_arr.len > 0 {
+                        
+                        status_parts := lines_arr[0].split(' ')
+                        if status_parts.len >= 2 {
+                            new_status_line := '${status_parts[0]} 200 OK'
+                            original_headers = original_headers.replace(lines_arr[0], new_status_line)
+                        }
+                    }
+                }
 				mut clean_headers := ''
 				for l in original_headers.split('\r\n') {
 					if l.to_lower().starts_with('access-control-') {
@@ -273,14 +296,31 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 				}
 				mut mod_headers := clean_headers.trim_right('\r\n')
 
-				mut allow_origin := '*'
+                mut proxy_cookies := []string{}
+                for l in original_headers.split('\r\n') {
+                    if l.to_lower().starts_with('set-cookie:') {
+                        val := l[11..].trim_space()
+                        proxy_cookies << '"' + val.replace('"', '\\"') + '"'
+                    }
+                }
+
+                if proxy_cookies.len > 0 {
+                    json_cookies := '[' + proxy_cookies.join(',') + ']'
+                    mod_headers += '\r\nX-Proxy-Cookies: ${json_cookies}'
+                }
+
+				mut allow_origin := origin
+				if allow_origin == '' {
+				    allow_origin = '*' 
+				}
 				if build_origin != '' {
 					allow_origin = if origin != '' { origin } else { '*' }
 				}
 				mod_headers += '\r\nAccess-Control-Allow-Origin: ${allow_origin}'
 				mod_headers += '\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS'
 				mod_headers += '\r\nAccess-Control-Allow-Headers: *'
-				mod_headers += '\r\nAccess-Control-Expose-Headers: *'
+				mod_headers += '\r\nAccess-Control-Allow-Credentials: true'
+				mod_headers += '\r\nAccess-Control-Expose-Headers: X-Proxy-Cookies'
 				mod_headers += '\r\nVary: ${target_header}, Origin'
 				mod_headers += '\r\n\r\n'
 
@@ -290,7 +330,7 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 				if body_part.len > 0 {
 					client.write(body_part) or { break }
 				}
-				header_data = []u8{} // free memory
+				header_data = []u8{} 
 			}
 		} else {
 			client.write(buf[..n]) or { break }
@@ -299,7 +339,6 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 	target.close() or {}
 }
 
-// Client -> Target chunk streaming
 fn pipe_stream_ct[T](client_ptr voidptr, target_ptr voidptr) {
 	unsafe {
 		mut client := &net.TcpConn(client_ptr)
@@ -310,9 +349,6 @@ fn pipe_stream_ct[T](client_ptr voidptr, target_ptr voidptr) {
 			if n == 0 {
 				break
 			}
-			// Use write_string + bytestr() instead of write() to bypass
-			// a missing mbedtls C implementation bug on Windows MSVC.
-			// V strings are binary-safe (can contain null bytes).
 			target.write_string(buf[..n].bytestr()) or { break }
 		}
 	}
