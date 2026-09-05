@@ -52,7 +52,10 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: vlang/setup-v@v1.7
         with:
-          stable: true
+          version: 'master'
+      - name: Enable MSVC Developer Command Prompt
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
 
 
       - name: Show V version
