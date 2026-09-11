@@ -3,45 +3,127 @@ module main
 import net
 import net.ssl
 import os
+import time
 
 const build_port = $env('PROXY_PORT')
 const build_origin = $env('PROXY_ORIGIN')
 const build_header = $env('PROXY_HEADER')
+const build_version = $env('VERSION')
+const artifact_name = $env('ARTIFACT_NAME')
+
+$if !windows {
+	#include <unistd.h>
+	fn C.fork() int
+	fn C.setsid() int
+
+	fn daemonize() {
+		if os.getenv('__DAEMONIZED') == '1' {
+			return
+		}
+		pid := C.fork()
+		if pid < 0 {
+			exit(1)
+		}
+		if pid > 0 {
+			exit(0)
+		}
+		C.setsid()
+		os.setenv('__DAEMONIZED', '1', true)
+	}
+}
 
 fn main() {
-	mut port := 7777
+	mut port := 17777
+	mut foreground := false
 	if build_port != '' {
 		port = build_port.int()
 	}
-	
-	if os.args.len > 1 {
-		parsed_port := os.args[1].int()
-		if parsed_port > 0 && parsed_port <= 65535 {
-			port = parsed_port
-		} else {
-			println('⚠️  Invalid port number "${os.args[1]}". Falling back to default.')
+	mut i := 1
+
+	for i < os.args.len {
+		arg := os.args[i]
+
+		match arg {
+			'--foreground', '-f' {
+				foreground = true
+				i++
+			}
+			'--port', '-p' {
+				if i + 1 < os.args.len {
+					parsed_port := os.args[i + 1].int()
+					if parsed_port > 0 && parsed_port <= 65535 {
+						port = parsed_port
+						i += 2
+					} else {
+						println('Invalid port: ${os.args[i + 1]}')
+						return
+					}
+				} else {
+					println('--port requires a value')
+					return
+				}
+			}
+			'--version', '-v' {
+				println('version: ${build_version}')
+				return
+			}
+			'--help', '-h' {
+				print_help()
+				return
+			}
+			else {
+				println('Unknown argument: ${arg}')
+				print_help()
+				return
+			}
+		}
+	}
+	$if !windows {
+		if !foreground {
+			daemonize()
+		}
+	} $else {
+		if !foreground {
+			println('Note: Automatic backgrounding is not supported on Windows. Run with -f or use PowerShell Start-Process if needed.')
 		}
 	}
 
-	mut listener := net.listen_tcp(.ip, ':${port}') or {
+	mut listener := net.listen_tcp(.ip, '127.0.0.1:${port}') or {
 		println('Failed to start server: ${err}')
 		return
 	}
 	println('Streaming API Proxy (Raw TCP Chunked) is running on http://localhost:${port}')
-	println('To use a custom port, run: ./proxy_stream <port_number>')
+	println('To use a custom port, run: ./${artifact_name} <port_number>')
 
 	for {
 		mut client := listener.accept() or {
 			println('Accept error: ${err}')
 			continue
 		}
-		spawn handle_client(mut client)
+		spawn handle_client(mut client, foreground)
 	}
 }
 
-fn handle_client(mut client net.TcpConn) {
+fn print_help() {
+	println('Local proxy server')
+	println('Usage')
+	println('${artifact_name} [OPTIONS]')
+	println('Options:')
+	println('  -f, --foreground     Run with console output')
+	println('  -p, --port <port>    Listen on custom port')
+	println('  -v, --version        Show version')
+	println('  -h, --help           Show this help')
+}
+
+fn log_request(foreground bool, method string, url string) {
+	if foreground {
+		println('[${time.now().format_ss()}] → ${method} ${url}')
+	}
+}
+
+fn handle_client(mut client net.TcpConn, foreground bool) {
 	defer { client.close() or {} }
-	client.set_read_timeout(30000000000) 
+	client.set_read_timeout(30000000000)
 
 	mut header_buf := []u8{cap: 4096}
 	mut temp_buf := []u8{len: 1}
@@ -71,7 +153,7 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	if matched_end != 4 {
-		return 
+		return
 	}
 
 	header_str := header_buf.bytestr()
@@ -96,21 +178,23 @@ fn handle_client(mut client net.TcpConn) {
 			}
 		}
 	}
-	
-	mut is_allowed := true
-	if build_origin != '' {
-		is_allowed = false
-		if origin == '' || origin == build_origin || origin == '${build_origin}/' || origin.starts_with('http://localhost:') {
-			is_allowed = true
-		}
+
+	mut is_allowed := false
+
+	if origin == '' || origin.starts_with('http://localhost:') || origin.starts_with('https://localhost:') {
+		is_allowed = true
+	} else if build_origin != '' && (origin == build_origin || origin == '${build_origin}/') {
+		is_allowed = true
 	}
-	
+
 	if !is_allowed {
+		if foreground {
+			println('[${time.now().format_ss()}] ✕ BLOCKED: Unauthorized Origin "${origin}"')
+		}
 		client.write_string('HTTP/1.1 403 Forbidden\r\n\r\nUnauthorized Origin: ${origin}') or {}
 		return
 	}
 
-	
 	if method == 'OPTIONS' {
 		mut req_headers_val := '*'
 		for line in lines {
@@ -123,7 +207,7 @@ fn handle_client(mut client net.TcpConn) {
 		}
 		mut allow_origin := origin
 		if allow_origin == '' {
-		    allow_origin = '*' 
+			allow_origin = '*'
 		}
 		if build_origin != '' {
 			allow_origin = if origin != '' { origin } else { '*' }
@@ -139,42 +223,44 @@ fn handle_client(mut client net.TcpConn) {
 	}
 
 	mut target_url_str := ''
-        
-    url_idx := req_path.index('?url=') or { -1 }
-    if url_idx != -1 {
-        raw_query_url := req_path[url_idx + 5..]
-        target_url_str = unescape_url(raw_query_url)
-    }
-    
-    if target_url_str == '' && (req_path.starts_with('/http://') || req_path.starts_with('/https://')) {
-        target_url_str = unescape_url(req_path[1..])
-    }
 
-    if target_url_str == '' {
-        for line in lines {
-            if line.to_lower().starts_with('${target_header}:') {
-                parts := line.split(':')
-                if parts.len > 1 {
-                    target_url_str = line[parts[0].len + 1..].trim_space()
-                }
-            }
-        }
-    }
+	url_idx := req_path.index('?url=') or { -1 }
+	if url_idx != -1 {
+		raw_query_url := req_path[url_idx + 5..]
+		target_url_str = unescape_url(raw_query_url)
+	}
 
-    if target_url_str == '' {
-        err_res := 'HTTP/1.1 400 Bad Request\r\n' +
-            'Access-Control-Allow-Origin: ${if origin != '' { origin } else { '*' }}\r\n' +
-            'Access-Control-Allow-Credentials: true\r\n\r\n' +
-            'Missing target URL'
-        client.write_string(err_res) or {}
-        return
-    }
+	if target_url_str == '' && (req_path.starts_with('/http://') || req_path.starts_with('/https://')) {
+		target_url_str = unescape_url(req_path[1..])
+	}
+
+	if target_url_str == '' {
+		for line in lines {
+			if line.to_lower().starts_with('${target_header}:') {
+				parts := line.split(':')
+				if parts.len > 1 {
+					target_url_str = line[parts[0].len + 1..].trim_space()
+				}
+			}
+		}
+	}
+
+	if target_url_str == '' {
+		err_res := 'HTTP/1.1 400 Bad Request\r\n' + 'Access-Control-Allow-Origin: ${if origin != '' {
+			origin
+		} else {
+			'*'
+		}}\r\n' + 'Access-Control-Allow-Credentials: true\r\n\r\n' + 'Missing target URL'
+		client.write_string(err_res) or {}
+		return
+	}
 
 	if target_url_str == '' {
 		client.write_string('HTTP/1.1 400 Bad Request\r\n\r\nMissing ${target_header} header or ?url= parameter') or {}
 		return
 	}
 
+	log_request(foreground, method, target_url_str)
 	mut scheme := 'http'
 	mut rest := target_url_str
 	if rest.starts_with('https://') {
@@ -276,17 +362,16 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 			if end_idx != -1 {
 				headers_passed = true
 				mut original_headers := header_data[0..end_idx].bytestr()
-                if original_headers.contains(' 302 ') || original_headers.contains(' 301 ') || original_headers.contains(' 307 ') || original_headers.contains(' 308 ') {
-                    lines_arr := original_headers.split('\r\n')
-                    if lines_arr.len > 0 {
-                        
-                        status_parts := lines_arr[0].split(' ')
-                        if status_parts.len >= 2 {
-                            new_status_line := '${status_parts[0]} 200 OK'
-                            original_headers = original_headers.replace(lines_arr[0], new_status_line)
-                        }
-                    }
-                }
+				if original_headers.contains(' 302 ') || original_headers.contains(' 301 ') || original_headers.contains(' 307 ') || original_headers.contains(' 308 ') {
+					lines_arr := original_headers.split('\r\n')
+					if lines_arr.len > 0 {
+						status_parts := lines_arr[0].split(' ')
+						if status_parts.len >= 2 {
+							new_status_line := '${status_parts[0]} 200 OK'
+							original_headers = original_headers.replace(lines_arr[0], new_status_line)
+						}
+					}
+				}
 				mut clean_headers := ''
 				for l in original_headers.split('\r\n') {
 					if l.to_lower().starts_with('access-control-') {
@@ -296,22 +381,22 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 				}
 				mut mod_headers := clean_headers.trim_right('\r\n')
 
-                mut proxy_cookies := []string{}
-                for l in original_headers.split('\r\n') {
-                    if l.to_lower().starts_with('set-cookie:') {
-                        val := l[11..].trim_space()
-                        proxy_cookies << '"' + val.replace('"', '\\"') + '"'
-                    }
-                }
+				mut proxy_cookies := []string{}
+				for l in original_headers.split('\r\n') {
+					if l.to_lower().starts_with('set-cookie:') {
+						val := l[11..].trim_space()
+						proxy_cookies << '"' + val.replace('"', '\\"') + '"'
+					}
+				}
 
-                if proxy_cookies.len > 0 {
-                    json_cookies := '[' + proxy_cookies.join(',') + ']'
-                    mod_headers += '\r\nX-Proxy-Cookies: ${json_cookies}'
-                }
+				if proxy_cookies.len > 0 {
+					json_cookies := '[' + proxy_cookies.join(',') + ']'
+					mod_headers += '\r\nX-Proxy-Cookies: ${json_cookies}'
+				}
 
 				mut allow_origin := origin
 				if allow_origin == '' {
-				    allow_origin = '*' 
+					allow_origin = '*'
 				}
 				if build_origin != '' {
 					allow_origin = if origin != '' { origin } else { '*' }
@@ -330,7 +415,7 @@ fn handle_target_stream[T](mut client net.TcpConn, mut target T, origin string, 
 				if body_part.len > 0 {
 					client.write(body_part) or { break }
 				}
-				header_data = []u8{} 
+				header_data = []u8{}
 			}
 		} else {
 			client.write(buf[..n]) or { break }
@@ -355,9 +440,15 @@ fn pipe_stream_ct[T](client_ptr voidptr, target_ptr voidptr) {
 }
 
 fn hex2int(c u8) u8 {
-	if c >= `0` && c <= `9` { return c - `0` }
-	if c >= `a` && c <= `f` { return c - `a` + 10 }
-	if c >= `A` && c <= `F` { return c - `A` + 10 }
+	if c >= `0` && c <= `9` {
+		return c - `0`
+	}
+	if c >= `a` && c <= `f` {
+		return c - `a` + 10
+	}
+	if c >= `A` && c <= `F` {
+		return c - `A` + 10
+	}
 	return 0
 }
 
