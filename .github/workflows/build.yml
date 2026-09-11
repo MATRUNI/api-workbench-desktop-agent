@@ -18,10 +18,6 @@ jobs:
             artifact_name: api-proxy-linux
             wb_artifact_name: workbench-agent-linux
 
-          - os: windows-latest
-            artifact_name: api-proxy-windows.exe
-            wb_artifact_name: workbench-agent-windows.exe
-
           - os: macos-latest
             artifact_name: api-proxy-macos
             wb_artifact_name: workbench-agent-macos
@@ -32,19 +28,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-
       - name: Setup V - Linux/macOS
-        if: matrix.os != 'windows-latest'
         uses: vlang/setup-v@v1
         with:
           stable: true
-
-      - name: Setup V - Windows
-        if: matrix.os == 'windows-latest'
-        uses: vlang/setup-v@v1.7
-        with:
-          stable: true
-
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -59,17 +46,6 @@ jobs:
             pkg-config \
             unzip \
             upx-ucl
-
-
-      - name: Setup MSVC
-        if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Install UPX - Windows
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: choco install upx -y
-
 
       - name: Show V version
         run: v version
@@ -149,71 +125,6 @@ jobs:
           test -f main
 
           mv main "${{ matrix.wb_artifact_name }}"
-
-
-      - name: Build Windows
-        if: matrix.os == 'windows-latest'
-        shell: cmd
-        run: |
-          set "VERSION=%GITHUB_REF_NAME%"
-
-          echo ========================================
-          echo Open Source Windows Build
-          echo ========================================
-
-          set "PROXY_PORT="
-          set "PROXY_ORIGIN="
-          set "PROXY_HEADER="
-          set "ARTIFACT_NAME=${{ matrix.artifact_name }}"
-
-          if exist main.exe del /f /q main.exe
-
-          v -cc msvc -prod -skip-unused -d no_backtrace main.v
-
-          if errorlevel 1 exit /b 1
-
-          if not exist main.exe (
-            echo ERROR: Windows executable was not generated
-            exit /b 1
-          )
-
-          upx --best --lzma main.exe
-
-          if errorlevel 1 exit /b 1
-
-          move /y main.exe "%ARTIFACT_NAME%"
-
-          echo ========================================
-          echo Secure Workbench Windows Build
-          echo ========================================
-
-          set "PROXY_PORT=17777"
-          set "PROXY_ORIGIN=https://api-os.pages.dev"
-          set "PROXY_HEADER=x-workbench-target"
-          set "ARTIFACT_NAME=${{ matrix.wb_artifact_name }}"
-
-          if exist main.exe del /f /q main.exe
-
-          v -cc msvc -prod -skip-unused -d no_backtrace main.v
-
-          if errorlevel 1 exit /b 1
-
-          if not exist main.exe (
-            echo ERROR: Windows executable was not generated
-            exit /b 1
-          )
-
-          upx --best --lzma main.exe
-
-          if errorlevel 1 exit /b 1
-
-          move /y main.exe "%ARTIFACT_NAME%"
-
-          echo ========================================
-          echo WINDOWS BUILD COMPLETE
-          echo ========================================
-
-
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
