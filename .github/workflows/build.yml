@@ -50,6 +50,9 @@ jobs:
       - name: Show V version
         run: v version
 
+      - name: Install UPX
+        if: matrix.os == 'macos-latest'
+        run: brew install upx
 
       - name: Build Linux
         if: matrix.os == 'ubuntu-latest'
@@ -110,6 +113,7 @@ jobs:
 
           test -f main
 
+          upx --best --lzma main
           mv main "${{ matrix.artifact_name }}"
 
           echo "== Secure Workbench Build =="
@@ -124,6 +128,7 @@ jobs:
 
           test -f main
 
+          upx --best --lzma main
           mv main "${{ matrix.wb_artifact_name }}"
 
       - name: Upload Artifacts
