@@ -31,6 +31,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -43,23 +45,26 @@ jobs:
             linux-libc-dev \
             pkg-config \
             unzip
+
       - name: Setup V - Linux/macOS
         if: matrix.os != 'windows-latest'
         uses: vlang/setup-v@v1
         with:
           stable: true
+
       - name: Setup V - Windows
         if: matrix.os == 'windows-latest'
         uses: vlang/setup-v@v1.7
         with:
           version: 'master'
+
       - name: Enable MSVC Developer Command Prompt
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-
       - name: Show V version
         run: v version
+
       - name: Install UPX (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -70,14 +75,15 @@ jobs:
         shell: bash
         run: |
           set -e
+          TAG_VERSION="${GITHUB_REF#refs/tags/}"
           
           # 1. Open Source Build
-          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           upx --best --lzma main
           mv main "${{ matrix.artifact_name }}"
           
           # 2. Secure Workbench Build
-          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.wb_artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           upx --best --lzma main
           mv main "${{ matrix.wb_artifact_name }}"
 
@@ -86,13 +92,14 @@ jobs:
         shell: bash
         run: |
           set -e
+          TAG_VERSION="${GITHUB_REF#refs/tags/}"
           
           # 1. Open Source Build
-          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           mv main "${{ matrix.artifact_name }}"
           
           # 2. Secure Workbench Build
-          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.wb_artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
           mv main "${{ matrix.wb_artifact_name }}"
 
       - name: Install UPX (Windows)
@@ -104,6 +111,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $tagVersion = $env:GITHUB_REF -replace 'refs/tags/', ''
           
           # 1. Open Source Build
           $env:PROXY_PORT=""
@@ -117,6 +125,8 @@ jobs:
           $env:PROXY_PORT="17777"
           $env:PROXY_ORIGIN="https://api-os.pages.dev"
           $env:PROXY_HEADER="x-workbench-target"
+          $env:VERSION=$tagVersion
+          $env:ARTIFACT_NAME="${{ matrix.wb_artifact_name }}"
           v -cc msvc -prod -skip-unused -d no_backtrace main.v
           upx --best --lzma main.exe
           Rename-Item main.exe "${{ matrix.wb_artifact_name }}"
