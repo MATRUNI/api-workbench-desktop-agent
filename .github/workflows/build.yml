@@ -43,7 +43,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: vlang/setup-v@v1.7
         with:
-          version: '0.5.2'
+          stable: true
 
 
       - name: Install Linux dependencies
