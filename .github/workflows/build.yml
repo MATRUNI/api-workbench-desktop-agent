@@ -33,6 +33,19 @@ jobs:
         uses: actions/checkout@v4
 
 
+      - name: Setup V - Linux/macOS
+        if: matrix.os != 'windows-latest'
+        uses: vlang/setup-v@v1
+        with:
+          stable: true
+
+      - name: Setup V - Windows
+        if: matrix.os == 'windows-latest'
+        uses: vlang/setup-v@v1.7
+        with:
+          version: '0.5.2'
+
+
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -44,174 +57,160 @@ jobs:
             libc6-dev \
             linux-libc-dev \
             pkg-config \
-            unzip
+            unzip \
+            upx-ucl
 
-      - name: Setup V - Linux/macOS
-        if: matrix.os != 'windows-latest'
-        uses: vlang/setup-v@v1
-        with:
-          stable: true
 
-      - name: Setup V - Windows
-        if: matrix.os == 'windows-latest'
-        uses: vlang/setup-v@v1.7
-        with:
-          version: 'master'
-
-      - name: Enable MSVC Developer Command Prompt
+      - name: Setup MSVC
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install UPX - Windows
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: choco install upx -y
+
 
       - name: Show V version
         run: v version
 
-      - name: Install UPX (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get install -y upx-ucl
 
       - name: Build Linux
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -e
+
           TAG_VERSION="${GITHUB_REF#refs/tags/}"
-          
-          # 1. Open Source Build
-          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+
+          echo "== Open Source Build =="
+
+          PROXY_PORT="" \
+          PROXY_ORIGIN="" \
+          PROXY_HEADER="" \
+          VERSION="$TAG_VERSION" \
+          ARTIFACT_NAME="${{ matrix.artifact_name }}" \
+          v -prod -skip-unused -d no_backtrace \
+            -cflags "-Os -flto -s" main.v
+
+          test -f main
+
           upx --best --lzma main
           mv main "${{ matrix.artifact_name }}"
-          
-          # 2. Secure Workbench Build
-          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.wb_artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+
+          echo "== Secure Workbench Build =="
+
+          PROXY_PORT="17777" \
+          PROXY_ORIGIN="https://api-os.pages.dev" \
+          PROXY_HEADER="x-workbench-target" \
+          VERSION="$TAG_VERSION" \
+          ARTIFACT_NAME="${{ matrix.wb_artifact_name }}" \
+          v -prod -skip-unused -d no_backtrace \
+            -cflags "-Os -flto -s" main.v
+
+          test -f main
+
           upx --best --lzma main
           mv main "${{ matrix.wb_artifact_name }}"
+
 
       - name: Build macOS
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
           set -e
+
           TAG_VERSION="${GITHUB_REF#refs/tags/}"
-          
-          # 1. Open Source Build
-          PROXY_PORT="" PROXY_ORIGIN="" PROXY_HEADER="" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+
+          echo "== Open Source Build =="
+
+          PROXY_PORT="" \
+          PROXY_ORIGIN="" \
+          PROXY_HEADER="" \
+          VERSION="$TAG_VERSION" \
+          ARTIFACT_NAME="${{ matrix.artifact_name }}" \
+          v -prod -skip-unused -d no_backtrace \
+            -cflags "-Os -flto -s" main.v
+
+          test -f main
+
           mv main "${{ matrix.artifact_name }}"
-          
-          # 2. Secure Workbench Build
-          PROXY_PORT="17777" PROXY_ORIGIN="https://api-os.pages.dev" PROXY_HEADER="x-workbench-target" VERSION="$TAG_VERSION" ARTIFACT_NAME="${{ matrix.wb_artifact_name }}" v -prod -skip-unused -d no_backtrace -cflags "-Os -flto -s" main.v
+
+          echo "== Secure Workbench Build =="
+
+          PROXY_PORT="17777" \
+          PROXY_ORIGIN="https://api-os.pages.dev" \
+          PROXY_HEADER="x-workbench-target" \
+          VERSION="$TAG_VERSION" \
+          ARTIFACT_NAME="${{ matrix.wb_artifact_name }}" \
+          v -prod -skip-unused -d no_backtrace \
+            -cflags "-Os -flto -s" main.v
+
+          test -f main
+
           mv main "${{ matrix.wb_artifact_name }}"
 
-      - name: Setup MSVC
-        if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install UPX
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: choco install upx -y
       - name: Build Windows
         if: matrix.os == 'windows-latest'
         shell: cmd
         run: |
-          echo === V ===
-          v version
+          set "VERSION=%GITHUB_REF_NAME%"
 
-          echo === MSVC ===
-          where cl
-          cl
-
-          echo === UPX ===
-          where upx
-          upx --version
-
-          REM ========================================
-          REM 1. Open Source Build
-          REM ========================================
-
-          echo.
           echo ========================================
-          echo Open Source Build
+          echo Open Source Windows Build
           echo ========================================
 
           set "PROXY_PORT="
           set "PROXY_ORIGIN="
           set "PROXY_HEADER="
-          set "VERSION=%GITHUB_REF_NAME%"
           set "ARTIFACT_NAME=${{ matrix.artifact_name }}"
 
-          echo VERSION=%VERSION%
-          echo ARTIFACT_NAME=%ARTIFACT_NAME%
+          if exist main.exe del /f /q main.exe
 
-          if exist "%ARTIFACT_NAME%" del /f /q "%ARTIFACT_NAME%"
+          v -cc msvc -prod -skip-unused -d no_backtrace main.v
 
-          echo Running V compiler...
-          v -cc msvc -prod -skip-unused -d no_backtrace -o "%ARTIFACT_NAME%" main.v
+          if errorlevel 1 exit /b 1
 
-          echo V EXIT CODE: %ERRORLEVEL%
-
-          echo.
-          echo Files after V compilation:
-          dir /a
-
-          if not exist "%ARTIFACT_NAME%" (
-            echo ERROR: %ARTIFACT_NAME% was not generated
+          if not exist main.exe (
+            echo ERROR: Windows executable was not generated
             exit /b 1
           )
 
-          echo Compressing...
-          upx --best --lzma "%ARTIFACT_NAME%"
+          upx --best --lzma main.exe
 
-          if errorlevel 1 (
-            echo ERROR: UPX failed
-            exit /b 1
-          )
+          if errorlevel 1 exit /b 1
 
-          REM ========================================
-          REM 2. Secure Workbench Build
-          REM ========================================
+          move /y main.exe "%ARTIFACT_NAME%"
 
-          echo.
           echo ========================================
-          echo Secure Workbench Build
+          echo Secure Workbench Windows Build
           echo ========================================
 
           set "PROXY_PORT=17777"
           set "PROXY_ORIGIN=https://api-os.pages.dev"
           set "PROXY_HEADER=x-workbench-target"
-          set "VERSION=%GITHUB_REF_NAME%"
           set "ARTIFACT_NAME=${{ matrix.wb_artifact_name }}"
 
-          echo VERSION=%VERSION%
-          echo ARTIFACT_NAME=%ARTIFACT_NAME%
+          if exist main.exe del /f /q main.exe
 
-          if exist "%ARTIFACT_NAME%" del /f /q "%ARTIFACT_NAME%"
+          v -cc msvc -prod -skip-unused -d no_backtrace main.v
 
-          echo Running V compiler...
-          v -cc msvc -prod -skip-unused -d no_backtrace -o "%ARTIFACT_NAME%" main.v
+          if errorlevel 1 exit /b 1
 
-          echo V EXIT CODE: %ERRORLEVEL%
-
-          echo.
-          echo Files after V compilation:
-          dir /a
-
-          if not exist "%ARTIFACT_NAME%" (
-            echo ERROR: %ARTIFACT_NAME% was not generated
+          if not exist main.exe (
+            echo ERROR: Windows executable was not generated
             exit /b 1
           )
 
-          echo Compressing...
-          upx --best --lzma "%ARTIFACT_NAME%"
+          upx --best --lzma main.exe
 
-          if errorlevel 1 (
-            echo ERROR: UPX failed
-            exit /b 1
-          )
+          if errorlevel 1 exit /b 1
 
-          echo.
+          move /y main.exe "%ARTIFACT_NAME%"
+
           echo ========================================
-          echo WINDOWS BUILD SUCCESSFUL
+          echo WINDOWS BUILD COMPLETE
           echo ========================================
 
 
